@@ -1,11 +1,18 @@
 const coins = {
-  AUR: { name: "Aurora", price: 148.0, history: [] },
-  NEX: { name: "Nexa", price: 82.0, history: [] }
+  // Existing coins in the project
+  AUR: { name: "Aurora", price: 148.0, history: [], volatilityPct: 2.2, category: "core" },
+  NEX: { name: "Nexa", price: 82.0, history: [], volatilityPct: 2.6, category: "core" },
+
+  // New meme coins (integrated into the same market update + bot rule system)
+  DRKT: { name: "DogeRocket", price: 0.084, history: [], volatilityPct: 8.5, category: "meme" },
+  PEPM: { name: "PepeMoon", price: 0.017, history: [], volatilityPct: 10.0, category: "meme" },
+  BANA: { name: "BananaCoin", price: 0.42, history: [], volatilityPct: 7.5, category: "meme" },
+  CATT: { name: "CatToken", price: 0.0064, history: [], volatilityPct: 12.0, category: "meme" }
 };
 
 const portfolio = {
   cash: 10000,
-  holdings: { AUR: 0, NEX: 0 }
+  holdings: {}
 };
 
 const state = {
@@ -13,12 +20,14 @@ const state = {
   isBotRunning: false,
   priceTimer: null,
   botTimer: null,
-  tick: 0
+  tick: 0,
+  chartSymbol: "AUR"
 };
 
 const dom = {
   coinCards: document.getElementById("coinCards"),
   chart: document.getElementById("priceChart"),
+  chartCoinSelect: document.getElementById("chartCoinSelect"),
   addRuleBtn: document.getElementById("addRuleBtn"),
   toggleBotBtn: document.getElementById("toggleBotBtn"),
   rulesContainer: document.getElementById("rulesContainer"),
@@ -26,8 +35,7 @@ const dom = {
   activityLog: document.getElementById("activityLog"),
   marketStatus: document.getElementById("marketStatus"),
   cashValue: document.getElementById("cashValue"),
-  aurHoldings: document.getElementById("aurHoldings"),
-  nexHoldings: document.getElementById("nexHoldings"),
+  portfolioRows: document.getElementById("portfolioRows"),
   totalValue: document.getElementById("totalValue")
 };
 
@@ -37,25 +45,108 @@ function fmtMoney(value) {
   return `$${value.toFixed(2)}`;
 }
 
+function fmtPrice(value) {
+  const abs = Math.abs(value);
+  if (abs >= 1) return `$${value.toFixed(2)}`;
+  if (abs >= 0.1) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(6)}`;
+}
+
 function fmtUnits(value) {
   return value.toFixed(4);
 }
 
-function createCoinCards() {
+function coinSymbols() {
+  return Object.keys(coins);
+}
+
+function ensurePortfolioHasAllCoins() {
+  for (const symbol of coinSymbols()) {
+    if (typeof portfolio.holdings[symbol] !== "number") portfolio.holdings[symbol] = 0;
+  }
+}
+
+function createMarketCards() {
   dom.coinCards.innerHTML = "";
 
-  Object.keys(coins).forEach((symbol) => {
+  coinSymbols().forEach((symbol) => {
+    const coin = coins[symbol];
     const card = document.createElement("article");
     card.className = "coin-card";
     card.dataset.symbol = symbol;
 
     card.innerHTML = `
-      <div class="coin-symbol">${symbol} · ${coins[symbol].name}</div>
+      <div class="coin-top">
+        <div>
+          <div class="coin-symbol">${symbol}</div>
+          <div class="coin-name">${coin.name}</div>
+        </div>
+        <span class="chip ${coin.category === "meme" ? "meme" : ""}">${coin.category === "meme" ? "Meme" : "Core"}</span>
+      </div>
       <div class="coin-price" data-role="price"></div>
       <div class="coin-change" data-role="change"></div>
+      <div class="coin-holdings">Hold: <span data-role="holdings"></span></div>
+      <div class="trade-row">
+        <div class="trade-input">
+          <input data-role="tradeAmount" type="number" min="0" step="0.0001" value="250" aria-label="Trade amount" />
+          <select data-role="tradeUnit" aria-label="Trade unit">
+            <option value="usd">USD</option>
+            <option value="coin">${symbol}</option>
+          </select>
+        </div>
+        <button class="btn-trade buy" data-action="buy" type="button">Buy</button>
+        <button class="btn-trade sell" data-action="sell" type="button">Sell</button>
+      </div>
     `;
 
+    card.querySelector('[data-action="buy"]').addEventListener("click", () => {
+      placeManualOrder(symbol, "buy", card);
+    });
+    card.querySelector('[data-action="sell"]').addEventListener("click", () => {
+      placeManualOrder(symbol, "sell", card);
+    });
+
     dom.coinCards.append(card);
+  });
+}
+
+function createPortfolioRows() {
+  dom.portfolioRows.innerHTML = "";
+
+  coinSymbols().forEach((symbol) => {
+    const coin = coins[symbol];
+    const row = document.createElement("article");
+    row.className = "portfolio-row";
+    row.dataset.symbol = symbol;
+
+    row.innerHTML = `
+      <div class="portfolio-meta">
+        <strong>${symbol} · ${coin.name}</strong>
+        <span><span data-role="units"></span> · <span data-role="value"></span></span>
+      </div>
+      <div class="portfolio-actions">
+        <div class="trade-input">
+          <input data-role="tradeAmount" type="number" min="0" step="0.0001" value="250" aria-label="Trade amount" />
+          <select data-role="tradeUnit" aria-label="Trade unit">
+            <option value="usd">USD</option>
+            <option value="coin">${symbol}</option>
+          </select>
+        </div>
+        <div class="portfolio-buttons">
+          <button class="btn-trade buy" data-action="buy" type="button">Buy</button>
+          <button class="btn-trade sell" data-action="sell" type="button">Sell</button>
+        </div>
+      </div>
+    `;
+
+    row.querySelector('[data-action="buy"]').addEventListener("click", () => {
+      placeManualOrder(symbol, "buy", row);
+    });
+    row.querySelector('[data-action="sell"]').addEventListener("click", () => {
+      placeManualOrder(symbol, "sell", row);
+    });
+
+    dom.portfolioRows.append(row);
   });
 }
 
@@ -70,18 +161,22 @@ function pushHistory() {
 function updatePrices() {
   Object.entries(coins).forEach(([symbol, coin]) => {
     const previous = coin.price;
-    const pctMove = (Math.random() * 4.4 - 2.2) / 100;
-    const nextPrice = Math.max(4, previous * (1 + pctMove));
-    coin.price = Number(nextPrice.toFixed(2));
+    const vol = typeof coin.volatilityPct === "number" ? coin.volatilityPct : 2.2;
+    const pctMove = (Math.random() * (vol * 2) - vol) / 100;
+    const nextPrice = Math.max(coin.category === "meme" ? 0.000001 : 4, previous * (1 + pctMove));
+    coin.price = Number(nextPrice.toFixed(coin.category === "meme" ? 6 : 2));
 
     const card = dom.coinCards.querySelector(`[data-symbol="${symbol}"]`);
+    if (!card) return;
     const priceEl = card.querySelector('[data-role="price"]');
     const changeEl = card.querySelector('[data-role="change"]');
+    const holdEl = card.querySelector('[data-role="holdings"]');
     const changePct = ((coin.price - previous) / previous) * 100;
 
-    priceEl.textContent = fmtMoney(coin.price);
+    priceEl.textContent = fmtPrice(coin.price);
     changeEl.textContent = `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
     changeEl.className = `coin-change ${changePct >= 0 ? "up" : "down"}`;
+    holdEl.textContent = fmtUnits(portfolio.holdings[symbol] || 0);
 
     card.classList.remove("flash-up", "flash-down");
     card.classList.add(changePct >= 0 ? "flash-up" : "flash-down");
@@ -97,14 +192,15 @@ function drawChart() {
   const { width, height } = dom.chart;
   chartCtx.clearRect(0, 0, width, height);
 
-  const series = Object.values(coins).flatMap((coin) => coin.history);
-  if (!series.length) return;
+  const coin = coins[state.chartSymbol];
+  if (!coin || coin.history.length < 2) return;
+  const series = coin.history;
 
-  const min = Math.min(...series) * 0.98;
-  const max = Math.max(...series) * 1.02;
+  const min = Math.min(...series) * 0.995;
+  const max = Math.max(...series) * 1.005;
   const range = Math.max(1, max - min);
 
-  chartCtx.strokeStyle = "#dce5f2";
+  chartCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   chartCtx.lineWidth = 1;
   for (let i = 0; i < 5; i += 1) {
     const y = (height / 4) * i;
@@ -114,29 +210,20 @@ function drawChart() {
     chartCtx.stroke();
   }
 
-  const drawLine = (history, color) => {
-    if (history.length < 2) return;
-    chartCtx.beginPath();
-    chartCtx.lineWidth = 2.5;
-    chartCtx.strokeStyle = color;
+  chartCtx.beginPath();
+  chartCtx.lineWidth = 2.75;
+  chartCtx.strokeStyle = "#3b82f6";
+  series.forEach((value, idx) => {
+    const x = (idx / (series.length - 1)) * (width - 26) + 13;
+    const y = height - ((value - min) / range) * (height - 26) - 13;
+    if (idx === 0) chartCtx.moveTo(x, y);
+    else chartCtx.lineTo(x, y);
+  });
+  chartCtx.stroke();
 
-    history.forEach((value, idx) => {
-      const x = (idx / (history.length - 1)) * (width - 26) + 13;
-      const y = height - ((value - min) / range) * (height - 26) - 13;
-      if (idx === 0) chartCtx.moveTo(x, y);
-      else chartCtx.lineTo(x, y);
-    });
-
-    chartCtx.stroke();
-  };
-
-  drawLine(coins.AUR.history, "#0b5fff");
-  drawLine(coins.NEX.history, "#f59e0b");
-
-  chartCtx.fillStyle = "#44516c";
-  chartCtx.font = "600 12px Manrope";
-  chartCtx.fillText(`AUR ${fmtMoney(coins.AUR.price)}`, 14, 20);
-  chartCtx.fillText(`NEX ${fmtMoney(coins.NEX.price)}`, 160, 20);
+  chartCtx.fillStyle = "rgba(234, 240, 255, 0.9)";
+  chartCtx.font = "800 12px Manrope";
+  chartCtx.fillText(`${state.chartSymbol} ${fmtPrice(coins[state.chartSymbol].price)}`, 14, 20);
 }
 
 function addRule(defaults = {}) {
@@ -144,7 +231,7 @@ function addRule(defaults = {}) {
   const rule = {
     id,
     action: defaults.action || "buy",
-    coin: defaults.coin || "AUR",
+    coin: defaults.coin || coinSymbols()[0],
     trigger: defaults.trigger || "below",
     price: Number(defaults.price || 100),
     amount: Number(defaults.amount || 100),
@@ -167,9 +254,20 @@ function renderRules() {
     const node = dom.ruleTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.id = rule.id;
 
+    const coinSelect = node.querySelector('[data-field="coin"]');
+    coinSelect.innerHTML = coinSymbols()
+      .map((symbol) => `<option value="${symbol}">${symbol} · ${coins[symbol].name}</option>`)
+      .join("");
+    coinSelect.value = rule.coin;
+
     node.querySelectorAll("[data-field]").forEach((input) => {
       const field = input.dataset.field;
+      if (field === "coin") return;
       input.value = rule[field];
+    });
+
+    node.querySelectorAll("[data-field]").forEach((input) => {
+      const field = input.dataset.field;
       input.addEventListener("input", () => {
         const current = state.rules.find((item) => item.id === rule.id);
         if (!current) return;
@@ -215,6 +313,7 @@ function evaluateRules() {
 }
 
 function executeBuy(rule, price) {
+  ensurePortfolioHasAllCoins();
   const spend = Math.min(Math.max(0, rule.amount), portfolio.cash);
   if (spend <= 0) {
     addActivity(`BUY skipped: not enough cash for ${rule.coin}`, "note");
@@ -226,10 +325,11 @@ function executeBuy(rule, price) {
   portfolio.holdings[rule.coin] += units;
   rule.lastExecutedTick = state.tick;
 
-  addActivity(`BUY ${rule.coin} ${fmtUnits(units)} @ ${fmtMoney(price)} (spent ${fmtMoney(spend)})`, "buy");
+  addActivity(`BUY ${rule.coin} ${fmtUnits(units)} @ ${fmtPrice(price)} (spent ${fmtMoney(spend)})`, "buy");
 }
 
 function executeSell(rule, price) {
+  ensurePortfolioHasAllCoins();
   const owned = portfolio.holdings[rule.coin];
   const unitsToSell = Math.min(Math.max(0, rule.amount), owned);
   if (unitsToSell <= 0) {
@@ -242,18 +342,27 @@ function executeSell(rule, price) {
   portfolio.cash += proceeds;
   rule.lastExecutedTick = state.tick;
 
-  addActivity(`SELL ${rule.coin} ${fmtUnits(unitsToSell)} @ ${fmtMoney(price)} (received ${fmtMoney(proceeds)})`, "sell");
+  addActivity(`SELL ${rule.coin} ${fmtUnits(unitsToSell)} @ ${fmtPrice(price)} (received ${fmtMoney(proceeds)})`, "sell");
 }
 
 function renderPortfolio() {
-  const aurVal = portfolio.holdings.AUR * coins.AUR.price;
-  const nexVal = portfolio.holdings.NEX * coins.NEX.price;
-  const total = portfolio.cash + aurVal + nexVal;
+  ensurePortfolioHasAllCoins();
+  let total = portfolio.cash;
+  coinSymbols().forEach((symbol) => {
+    total += (portfolio.holdings[symbol] || 0) * coins[symbol].price;
+  });
 
   dom.cashValue.textContent = fmtMoney(portfolio.cash);
-  dom.aurHoldings.textContent = `${fmtUnits(portfolio.holdings.AUR)} (${fmtMoney(aurVal)})`;
-  dom.nexHoldings.textContent = `${fmtUnits(portfolio.holdings.NEX)} (${fmtMoney(nexVal)})`;
   dom.totalValue.textContent = fmtMoney(total);
+
+  coinSymbols().forEach((symbol) => {
+    const row = dom.portfolioRows.querySelector(`[data-symbol="${symbol}"]`);
+    if (!row) return;
+    const units = portfolio.holdings[symbol] || 0;
+    const value = units * coins[symbol].price;
+    row.querySelector('[data-role="units"]').textContent = `${fmtUnits(units)} units`;
+    row.querySelector('[data-role="value"]').textContent = `${fmtMoney(value)}`;
+  });
 }
 
 function addActivity(message, type) {
@@ -273,7 +382,7 @@ function setBotRunning(next, options = {}) {
   dom.toggleBotBtn.textContent = next ? "Stop Bot" : "Start Bot";
   dom.toggleBotBtn.classList.toggle("btn-primary", !next);
   dom.toggleBotBtn.classList.toggle("btn-secondary", next);
-  dom.marketStatus.textContent = next ? "Running" : "Paused";
+  dom.marketStatus.textContent = next ? "Bot Running" : "Bot Paused";
   dom.marketStatus.classList.toggle("stopped", !next);
 
   if (!silent) {
@@ -281,10 +390,70 @@ function setBotRunning(next, options = {}) {
   }
 }
 
+function placeManualOrder(symbol, side, containerEl) {
+  ensurePortfolioHasAllCoins();
+  const amountEl = containerEl.querySelector('[data-role="tradeAmount"]');
+  const unitEl = containerEl.querySelector('[data-role="tradeUnit"]');
+  const amount = Number(amountEl.value);
+  const unit = unitEl.value === "usd" ? "usd" : "coin";
+  const price = coins[symbol].price;
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    addActivity(`${side.toUpperCase()} skipped: invalid amount`, "note");
+    return;
+  }
+
+  if (side === "buy") {
+    const spend = unit === "usd" ? amount : amount * price;
+    const actualSpend = Math.min(spend, portfolio.cash);
+    if (actualSpend <= 0) {
+      addActivity(`BUY ${symbol} skipped: not enough cash`, "note");
+      return;
+    }
+    const units = actualSpend / price;
+    portfolio.cash -= actualSpend;
+    portfolio.holdings[symbol] += units;
+    addActivity(`BUY ${symbol} ${fmtUnits(units)} @ ${fmtPrice(price)} (spent ${fmtMoney(actualSpend)})`, "buy");
+  } else {
+    const unitsToSell = unit === "coin" ? amount : amount / price;
+    const actualUnits = Math.min(unitsToSell, portfolio.holdings[symbol] || 0);
+    if (actualUnits <= 0) {
+      addActivity(`SELL ${symbol} skipped: no holdings`, "note");
+      return;
+    }
+    const proceeds = actualUnits * price;
+    portfolio.holdings[symbol] -= actualUnits;
+    portfolio.cash += proceeds;
+    addActivity(`SELL ${symbol} ${fmtUnits(actualUnits)} @ ${fmtPrice(price)} (received ${fmtMoney(proceeds)})`, "sell");
+  }
+
+  renderPortfolio();
+  const card = dom.coinCards.querySelector(`[data-symbol="${symbol}"]`);
+  if (card) card.querySelector('[data-role="holdings"]').textContent = fmtUnits(portfolio.holdings[symbol] || 0);
+}
+
+function hydrateChartSelect() {
+  const symbols = coinSymbols();
+  if (!symbols.includes(state.chartSymbol)) state.chartSymbol = symbols[0];
+
+  dom.chartCoinSelect.innerHTML = symbols
+    .map((symbol) => `<option value="${symbol}">${symbol} · ${coins[symbol].name}</option>`)
+    .join("");
+  dom.chartCoinSelect.value = state.chartSymbol;
+  dom.chartCoinSelect.addEventListener("change", () => {
+    state.chartSymbol = dom.chartCoinSelect.value;
+    drawChart();
+  });
+}
+
 function bootstrap() {
-  createCoinCards();
+  ensurePortfolioHasAllCoins();
+  createMarketCards();
+  createPortfolioRows();
+  hydrateChartSelect();
   addRule({ action: "buy", coin: "AUR", trigger: "below", price: 140, amount: 400 });
   addRule({ action: "sell", coin: "NEX", trigger: "above", price: 90, amount: 1.2 });
+  addRule({ action: "buy", coin: "PEPM", trigger: "below", price: 0.015, amount: 250 });
 
   for (let i = 0; i < 22; i += 1) {
     updatePrices();

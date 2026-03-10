@@ -26,7 +26,13 @@
       <section class="panel market-panel">
         <div class="section-head">
           <h2>Live Market</h2>
-          <span id="marketStatus" class="status-pill">Running</span>
+          <div class="head-actions">
+            <label class="mini-field">
+              <span>Chart</span>
+              <select id="chartCoinSelect"></select>
+            </label>
+            <span id="marketStatus" class="status-pill">Bot Paused</span>
+          </div>
         </div>
         <div id="coinCards" class="coin-cards"></div>
         <canvas id="priceChart" width="980" height="280"></canvas>
@@ -38,14 +44,7 @@
           <span>Cash</span>
           <strong id="cashValue">$0.00</strong>
         </div>
-        <div class="stat-row">
-          <span>AUR Holdings</span>
-          <strong id="aurHoldings">0.0000</strong>
-        </div>
-        <div class="stat-row">
-          <span>NEX Holdings</span>
-          <strong id="nexHoldings">0.0000</strong>
-        </div>
+        <div id="portfolioRows" class="portfolio-rows"></div>
         <div class="stat-row total">
           <span>Total Value</span>
           <strong id="totalValue">$0.00</strong>
@@ -78,10 +77,7 @@
         </label>
         <label>
           Coin
-          <select data-field="coin">
-            <option value="AUR">AUR</option>
-            <option value="NEX">NEX</option>
-          </select>
+          <select data-field="coin"></select>
         </label>
         <label>
           Trigger
@@ -92,10 +88,10 @@
         </label>
         <label>
           Price
-          <input data-field="price" type="number" min="0.01" step="0.01" value="100" />
+          <input data-field="price" type="number" min="0.000001" step="0.000001" value="100" />
         </label>
         <label>
-          Amount
+          Amount (USD for buy, units for sell)
           <input data-field="amount" type="number" min="0.0001" step="0.0001" value="100" />
         </label>
       </div>
